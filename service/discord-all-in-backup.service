@@ -1,0 +1,15 @@
+[Unit]
+Description=Snapshot the discord-all-in database
+
+[Service]
+Type=oneshot
+# Must match User= in discord-all-in.service.
+User=botuser
+ExecStart=/usr/share/discord-all-in/discord-all-in backup
+Environment=LOG_FORMAT=json
+Environment=DATA_DIR=/var/lib/discord-all-in
+StateDirectory=discord-all-in
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

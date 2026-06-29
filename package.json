@@ -1,0 +1,28 @@
+{
+  "name": "discord-all-in",
+  "version": "1.0.0",
+  "description": "Discord casino & economy bot",
+  "type": "module",
+  "module": "src/index.ts",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "deploy-commands": "bun run scripts/deploy-commands.ts",
+    "backup": "bun run scripts/backup.ts",
+    "restore": "bun run scripts/restore.ts",
+    "build": "bun build --compile --minify --sourcemap src/index.ts --outfile dist/discord-all-in",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "pino": "^9.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "pino-pretty": "^13.0.0",
+    "typescript": "^5.6.3"
+  }
+}

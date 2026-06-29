@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data & backups (never commit the economy DB)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Machine-local helper scripts (not part of the repo)
+/update.sh

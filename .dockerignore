@@ -1,0 +1,28 @@
+# Build context hygiene — keep the image small and never bake in secrets/state.
+.git
+node_modules
+dist
+data
+
+# Secrets (loaded at runtime via env_file, never copied into the image)
+.env
+.env.*
+!.env.example
+
+# Local SQLite DB + backups
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Logs, editor, OS cruft
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Docs & service files aren't needed at runtime
+docs/
+service/
+README.md

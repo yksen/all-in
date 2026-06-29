@@ -1,0 +1,18 @@
+services:
+  bot:
+    build: .
+    image: discord-all-in:latest
+    container_name: discord-all-in
+    restart: unless-stopped
+    # Credentials + optional tuning come from .env (copy .env.example first).
+    env_file: .env
+    environment:
+      # Override anything from .env that must hold inside the container.
+      LOG_FORMAT: json
+      DATA_DIR: /data
+    volumes:
+      # SQLite DB + backups persist across restarts/updates in this named volume.
+      - data:/data
+
+volumes:
+  data:

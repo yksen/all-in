@@ -1,0 +1,37 @@
+[Unit]
+Description=Discord All-In (casino & economy bot)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Change to the (non-root) account the bot should run as.
+User=botuser
+ExecStart=/usr/share/discord-all-in/discord-all-in
+EnvironmentFile=/usr/share/discord-all-in/.env
+Environment=LOG_FORMAT=json
+Environment=DATA_DIR=/var/lib/discord-all-in
+WorkingDirectory=/var/lib/discord-all-in
+# Creates /var/lib/discord-all-in (RW, owned by User) for the DB + backups.
+StateDirectory=discord-all-in
+Restart=always
+RestartSec=10
+SyslogIdentifier=discord-all-in
+StandardOutput=journal
+StandardError=journal
+
+# --- Hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
