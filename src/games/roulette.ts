@@ -30,6 +30,8 @@ const R = config.games.roulette;
 
 interface PlacedBet extends BetDef {
   amount: number;
+  /** Player used an "All in" button / max stake. */
+  allIn?: boolean;
 }
 
 /** A persistent, always-on roulette table installed on one channel. */
@@ -171,7 +173,7 @@ function performSpin(table: LiveTable, services: Services, forced?: number): voi
         wager: staked,
         payout: returned,
         outcome: net > 0 ? "win" : net < 0 ? "loss" : "push",
-        details: { result },
+        details: { result, allIn: bets.some((b) => b.allIn) },
         startedAt: table.roundStartedAt,
       });
     }
@@ -506,7 +508,7 @@ function tryPlaceBet(
     if (err instanceof InsufficientFundsError) return "You don't have enough chips for that bet.";
     throw err;
   }
-  userBets.push({ ...def, amount });
+  userBets.push({ ...def, amount, allIn: stake === "max" });
   table.bets.set(userId, userBets);
   return null;
 }

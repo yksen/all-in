@@ -149,6 +149,35 @@ export const config = {
       maxBet: 50_000,
       challengeTimeoutSeconds: 120,
     },
+    /**
+     * Crash is a persistent, always-on table an admin installs on a channel (like
+     * roulette). Each round: a betting window, then a multiplier that climbs from 1.00x
+     * and busts at a random point; players race to cash out before it crashes.
+     */
+    crash: {
+      minBet: 10,
+      maxBet: 10_000,
+      /** Length of the betting window before each flight. */
+      bettingSeconds: 12,
+      /** Bump the panel to the bottom of the channel this many seconds before a flight
+       *  (only when nobody has bet yet and it's been buried) so it doesn't get lost in chat. */
+      repostLeadSeconds: 6,
+      /** Pause showing the result after a crash before the next betting window opens. */
+      cooldownSeconds: 6,
+      /**
+       * Animation frame interval. ~1s is the floor for live-editing a single Discord
+       * message: editing faster just makes discord.js queue the edits and the shown
+       * multiplier lags real time. The displayed value is computed from real elapsed
+       * time, so it stays exact even at 1 fps.
+       */
+      refreshMs: 1_000,
+      /** Pacing knob: the multiplier doubles every this many seconds (k = ln2 / this). */
+      doubleEverySeconds: 6,
+      /** House edge — EV of any cash-out target is (1 - houseEdge). */
+      houseEdge: 0.01,
+      /** Crash multiplier cap; also bounds the longest possible flight (~34s at 50x). */
+      maxMultiplier: 50,
+    },
   },
 
   /** How long an interactive game session waits for the player before expiring. */

@@ -91,4 +91,19 @@ export const migrations: { version: number; sql: string }[] = [
       );
     `,
   },
+  {
+    version: 4,
+    sql: /* sql */ `
+      -- A persistent crash table installed by an admin on a channel. Like roulette, it
+      -- survives restarts: on startup the bot re-attaches to message_id and resumes its
+      -- round loop. In-flight bets at restart are refunded by refundOpenGames().
+      CREATE TABLE crash_tables (
+        channel_id TEXT PRIMARY KEY,
+        guild_id   TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];

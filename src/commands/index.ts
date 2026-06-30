@@ -1,9 +1,11 @@
 import type { Command } from "../framework/types.ts";
 import { leaderboard } from "./leaderboard.ts";
 import { topWins, topLosses } from "./top.ts";
+import { recent } from "./recent.ts";
 import { stats, serverstats } from "./stats.ts";
 import { blackjackCommand } from "../games/blackjack.ts";
 import { adminRouletteCommand } from "../games/roulette.ts";
+import { adminCrashCommand } from "../games/crash.ts";
 import { pokerCommand } from "../games/poker.ts";
 import { coinflipCommand } from "../games/coinflip.ts";
 import { admin } from "./admin.ts";
@@ -16,10 +18,12 @@ export const commands: Command[] = [
   leaderboard,
   topWins,
   topLosses,
+  recent,
   stats,
   serverstats,
   blackjackCommand,
   adminRouletteCommand,
+  adminCrashCommand,
   pokerCommand,
   coinflipCommand,
   admin,

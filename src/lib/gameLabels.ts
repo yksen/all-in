@@ -4,6 +4,7 @@ export const GAME_LABELS: Record<string, string> = {
   roulette: "Roulette",
   holdem: "Casino Hold'em",
   coinflip: "Coinflip",
+  crash: "Crash",
 };
 
 export function gameLabel(game: string): string {

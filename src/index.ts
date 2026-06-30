@@ -8,6 +8,7 @@ import { commands } from "./commands/index.ts";
 import { componentHandlers } from "./interactions/index.ts";
 import { VoiceTracker } from "./economy/voiceTracker.ts";
 import { resumeRouletteTables } from "./games/roulette.ts";
+import { resumeCrashTables } from "./games/crash.ts";
 import { parseCid } from "./lib/ids.ts";
 import { replyError } from "./lib/reply.ts";
 import { runBackup, runRestore } from "./maintenance/backup.ts";
@@ -44,6 +45,7 @@ client.once(Events.ClientReady, async (c) => {
   voiceTracker.start();
   await recoverInterruptedGames();
   await resumeRouletteTables(services, client);
+  await resumeCrashTables(services, client);
 });
 
 /**
@@ -59,7 +61,7 @@ async function recoverInterruptedGames(): Promise<void> {
 
   const edited = new Set<string>();
   for (const item of items) {
-    if (item.game === "roulette") continue; // the persistent table manages its own message
+    if (item.game === "roulette" || item.game === "crash") continue; // the persistent table manages its own message
     if (!item.channel_id || !item.message_id) continue;
     const key = `${item.channel_id}:${item.message_id}`;
     if (edited.has(key)) continue;

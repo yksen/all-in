@@ -26,6 +26,8 @@ export interface TopRoundRow {
   net: number;
   outcome: string;
   ended_at: number;
+  /** JSON blob; only populated by recentRounds. */
+  details?: string | null;
 }
 
 export interface ServerStats {
@@ -116,6 +118,16 @@ export class Rounds {
          WHERE guild_id = ? AND ${where} ORDER BY ${order} LIMIT ?`,
       )
       .all(guildId, limit) as TopRoundRow[];
+  }
+
+  /** A player's most recently finished rounds, newest first. */
+  recentRounds(guildId: string, userId: string, limit: number): TopRoundRow[] {
+    return this.db
+      .query(
+        `SELECT user_id, game, wager, payout, net, outcome, ended_at, details FROM game_rounds
+         WHERE guild_id = ? AND user_id = ? ORDER BY ended_at DESC LIMIT ?`,
+      )
+      .all(guildId, userId, limit) as TopRoundRow[];
   }
 
   serverStats(guildId: string): ServerStats {

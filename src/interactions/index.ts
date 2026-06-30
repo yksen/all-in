@@ -1,6 +1,7 @@
 import type { ComponentHandler } from "../framework/types.ts";
 import { blackjackComponent } from "../games/blackjack.ts";
 import { rouletteComponent } from "../games/roulette.ts";
+import { crashComponent } from "../games/crash.ts";
 import { pokerComponent } from "../games/poker.ts";
 import { coinflipComponent } from "../games/coinflip.ts";
 
@@ -11,6 +12,7 @@ import { coinflipComponent } from "../games/coinflip.ts";
 export const componentHandlers: ComponentHandler[] = [
   blackjackComponent,
   rouletteComponent,
+  crashComponent,
   pokerComponent,
   coinflipComponent,
 ];
