@@ -16,7 +16,8 @@ import { handTotal, isBlackjack, isBust } from "./engine/handvalue.ts";
 import { type SessionBase, SessionStore } from "../lib/sessions.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
 import { formatChips, formatSigned } from "../lib/money.ts";
-import { renderHand } from "../ui/cards.ts";
+import { replayStakes } from "../lib/stakes.ts";
+import { type CardView, renderCards, renderHand } from "../ui/cards.ts";
 import { Colors } from "../ui/theme.ts";
 import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
@@ -203,22 +204,13 @@ function actionButtons(session: BlackjackSession, services: Services): ActionRow
 }
 
 function replayRow(betPerHand: number, numHands: number): ActionRowBuilder<ButtonBuilder> {
-  const half = Math.max(BJ.minBet, Math.floor(betPerHand / 2));
-  const dbl = Math.min(BJ.maxBet, betPerHand * 2);
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const buttons = replayStakes(betPerHand, BJ.minBet, BJ.maxBet, "Replay").map((o, i) =>
     new ButtonBuilder()
-      .setCustomId(cid(PREFIX, "replay", betPerHand, numHands))
-      .setLabel(`Replay (${betPerHand})`)
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(cid(PREFIX, "replay", half, numHands))
-      .setLabel(`½ (${half})`)
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(cid(PREFIX, "replay", dbl, numHands))
-      .setLabel(`2× (${dbl})`)
-      .setStyle(ButtonStyle.Secondary),
+      .setCustomId(cid(PREFIX, "replay", o.amt, numHands))
+      .setLabel(o.label)
+      .setStyle(i === 0 ? ButtonStyle.Primary : ButtonStyle.Secondary),
   );
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 }
 
 // --- settlement -------------------------------------------------------------
@@ -283,6 +275,17 @@ function revealFrame(session: BlackjackSession, dealerCards: Card[]): EmbedBuild
     .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
     .setTitle("🃏 Blackjack")
     .addFields({ name: "🤵 Dealer", value: `${renderHand(dealerCards)}\n**Total: ${handTotal(dealerCards).total}**` });
+  for (let i = 0; i < session.hands.length; i++) embed.addFields(handField(session.hands[i]!, i, false, true));
+  return embed;
+}
+
+/** A hole-card flip frame: dealer's upcard face-up, the hole card drawn per `holeView`. */
+function holeFlipFrame(session: BlackjackSession, holeCards: Card[], holeView: CardView): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setColor(Colors.table)
+    .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
+    .setTitle("🃏 Blackjack")
+    .addFields({ name: "🤵 Dealer", value: renderCards(holeCards, ["face", holeView]) });
   for (let i = 0; i < session.hands.length; i++) embed.addFields(handField(session.hands[i]!, i, false, true));
   return embed;
 }
@@ -499,13 +502,20 @@ export const blackjackComponent: ComponentHandler = {
       if (next === -1) {
         const { embed, steps } = resolve(session, services);
         getStore(services).delete(session.id);
-        // Animate the dealer reveal: flip the hole card, then draw out card by card.
-        await interaction.update({ embeds: [revealFrame(session, steps[0]!)], components: [] });
+        // Flip the hole card (back → edge → face), then draw the dealer out card by card.
+        const hole = steps[0]!; // the dealer's starting two cards
+        await interaction.update({ embeds: [holeFlipFrame(session, hole, "back")], components: [] });
+        await sleep(450);
+        await interaction.editReply({ embeds: [holeFlipFrame(session, hole, "flip")] }).catch(() => {});
+        await sleep(450);
+        await interaction.editReply({ embeds: [revealFrame(session, hole)] }).catch(() => {});
         for (let k = 1; k < steps.length; k++) {
           await sleep(800);
           await interaction.editReply({ embeds: [revealFrame(session, steps[k]!)] }).catch(() => {});
         }
         await sleep(steps.length > 1 ? 600 : 350);
+        // Little flourish on a natural 21.
+        if (session.hands.some((h) => isBlackjack(h.cards))) embed.setTitle("🃏 Blackjack — ✨ 21!");
         await interaction.editReply({ embeds: [embed], components: [replayRow(session.betPerHand, session.numHands)] });
         return;
       }

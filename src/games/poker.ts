@@ -17,11 +17,13 @@ import { bestOf, compareRanks, type HandRank } from "./engine/pokerEval.ts";
 import { type SessionBase, SessionStore } from "../lib/sessions.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
 import { formatChips, formatSigned } from "../lib/money.ts";
-import { renderHand } from "../ui/cards.ts";
+import { replayStakes } from "../lib/stakes.ts";
+import { type CardView, renderCards, renderHand } from "../ui/cards.ts";
 import { Colors } from "../ui/theme.ts";
 import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
 import { replyError } from "../lib/reply.ts";
+import { sleep } from "../lib/sleep.ts";
 
 const PREFIX = "chp";
 const HE = config.games.casinoHoldem;
@@ -80,16 +82,25 @@ function flopEmbed(session: PokerSession): EmbedBuilder {
 }
 
 function replayRow(ante: number): ActionRowBuilder<ButtonBuilder> {
-  const half = Math.max(HE.minAnte, Math.floor(ante / 2));
-  const dbl = Math.min(HE.maxAnte, ante * 2);
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(cid(PREFIX, "replay", ante)).setLabel(`Replay (${ante})`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(cid(PREFIX, "replay", half)).setLabel(`½ (${half})`).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(cid(PREFIX, "replay", dbl)).setLabel(`2× (${dbl})`).setStyle(ButtonStyle.Secondary),
+  const buttons = replayStakes(ante, HE.minAnte, HE.maxAnte, "Replay").map((o, i) =>
+    new ButtonBuilder()
+      .setCustomId(cid(PREFIX, "replay", o.amt))
+      .setLabel(o.label)
+      .setStyle(i === 0 ? ButtonStyle.Primary : ButtonStyle.Secondary),
   );
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 }
 
-function settleEmbed(session: PokerSession, services: Services, opts: { folded: boolean }): EmbedBuilder {
+interface Settlement {
+  net: number;
+  resultText: string;
+  playerName: string; // best-hand category name
+  dealerName: string;
+  balance: number;
+}
+
+/** Decide the hand, move the money, record the round. Call ONCE, before any reveal animation. */
+function settle(session: PokerSession, services: Services, opts: { folded: boolean }): Settlement {
   const playerBest = bestOf([...session.player, ...session.community]);
   const dealerBest = bestOf([...session.dealer, ...session.community]);
   const call = session.ante * 2;
@@ -148,18 +159,62 @@ function settleEmbed(session: PokerSession, services: Services, opts: { folded: 
     startedAt: session.startedAt,
   });
 
-  const net = returned - totalWager;
-  const balance = services.wallet.getBalance(session.guildId, session.userId);
+  return {
+    net: returned - totalWager,
+    resultText,
+    playerName: playerBest.name,
+    dealerName: dealerBest.name,
+    balance: services.wallet.getBalance(session.guildId, session.userId),
+  };
+}
+
+/** The final showdown card — everything face-up with the result. Built from a prior settle(). */
+function finalEmbed(session: PokerSession, s: Settlement): EmbedBuilder {
   return new EmbedBuilder()
-    .setColor(net > 0 ? Colors.win : net < 0 ? Colors.loss : Colors.push)
+    .setColor(s.net > 0 ? Colors.win : s.net < 0 ? Colors.loss : Colors.push)
     .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
     .setTitle("🃏 Casino Hold'em — showdown")
     .addFields(
       { name: "Board", value: renderHand(session.community) },
-      { name: `You — ${playerBest.name}`, value: renderHand(session.player) },
-      { name: `Dealer — ${dealerBest.name}`, value: renderHand(session.dealer) },
-      { name: "Result", value: `${resultText}\n${formatSigned(net)} • balance: **${formatChips(balance)}**` },
+      { name: `You — ${s.playerName}`, value: renderHand(session.player) },
+      { name: `Dealer — ${s.dealerName}`, value: renderHand(session.dealer) },
+      { name: "Result", value: `${s.resultText}\n${formatSigned(s.net)} • balance: **${formatChips(s.balance)}**` },
     );
+}
+
+/** One in-progress reveal frame (no result yet) — community/dealer drawn per the given views. */
+function showdownEmbed(session: PokerSession, communityViews: CardView[], dealerViews: CardView[]): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(Colors.brand)
+    .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
+    .setTitle("🃏 Casino Hold'em — showdown")
+    .addFields(
+      { name: "Board", value: renderCards(session.community, communityViews) },
+      { name: "Your cards", value: renderHand(session.player) },
+      { name: "Dealer", value: renderCards(session.dealer, dealerViews) },
+    );
+}
+
+/** Burst-reveal turn+river, then flip the dealer's hole cards. Cosmetic — settle() ran first. */
+async function animateShowdown(interaction: ButtonInteraction<"cached">, session: PokerSession, s: Settlement): Promise<void> {
+  const community: CardView[] = ["face", "face", "face", "back", "back"];
+  const dealer: CardView[] = ["back", "back"];
+  await interaction.update({ embeds: [showdownEmbed(session, community, dealer)], components: [] });
+
+  const steps: (() => void)[] = [
+    () => (community[3] = "face"), // turn
+    () => (community[4] = "face"), // river
+    () => ((dealer[0] = "flip"), (dealer[1] = "flip")), // dealer cards on edge
+    () => ((dealer[0] = "face"), (dealer[1] = "face")), // dealer revealed
+  ];
+  for (const step of steps) {
+    await sleep(600);
+    step();
+    await interaction.editReply({ embeds: [showdownEmbed(session, community, dealer)] }).catch(() => {});
+  }
+  await sleep(500);
+  // No silent catch on the result edit — if it ever fails we want it in the logs, not hidden.
+  await interaction.editReply({ embeds: [finalEmbed(session, s)], components: [replayRow(session.ante)] });
 }
 
 async function onTimeout(session: PokerSession): Promise<void> {
@@ -167,7 +222,8 @@ async function onTimeout(session: PokerSession): Promise<void> {
   await servicesRef.locks.run(`${session.guildId}:${session.userId}`, async () => {
     if (session.finished) return;
     session.finished = true;
-    const embed = settleEmbed(session, servicesRef, { folded: true }).setFooter({ text: "⏱️ Timed out — auto-folded." });
+    const s = settle(session, servicesRef, { folded: true });
+    const embed = finalEmbed(session, s).setFooter({ text: "⏱️ Timed out — auto-folded." });
     await session.message!.edit({ embeds: [embed], components: [replayRow(session.ante)] }).catch(() => {});
   });
 }
@@ -269,10 +325,8 @@ export const pokerComponent: ComponentHandler = {
       if (action === "fold") {
         session.finished = true;
         getStore(services).delete(session.id);
-        await interaction.update({
-          embeds: [settleEmbed(session, services, { folded: true })],
-          components: [replayRow(session.ante)],
-        });
+        const s = settle(session, services, { folded: true });
+        await interaction.update({ embeds: [finalEmbed(session, s)], components: [replayRow(session.ante)] });
         return;
       }
 
@@ -299,10 +353,8 @@ export const pokerComponent: ComponentHandler = {
         }
         session.finished = true;
         getStore(services).delete(session.id);
-        await interaction.update({
-          embeds: [settleEmbed(session, services, { folded: false })],
-          components: [replayRow(session.ante)],
-        });
+        const s = settle(session, services, { folded: false }); // money settles first; the reveal is cosmetic
+        await animateShowdown(interaction, session, s);
       }
     });
   },

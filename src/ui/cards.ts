@@ -51,14 +51,33 @@ function hiddenLines(): string[] {
   return ["┌─────┐", body, body, body, "└─────┘"].map((line) => `${GRAY}${line}${RESET}`);
 }
 
+/** A card seen edge-on — the mid-flip frame. Same 7-char footprint so columns stay aligned. */
+function flippingLines(): string[] {
+  return ["  ┌─┐  ", "  │ │  ", "  │ │  ", "  │ │  ", "  └─┘  "].map((line) => `${GRAY}${line}${RESET}`);
+}
+
+/** How to draw each card: face-up, face-down (back), or mid-flip (edge-on). */
+export type CardView = "face" | "back" | "flip";
+
+/** Render specific per-card views side-by-side as one ANSI code block (drives flip reveals). */
+export function renderCards(cards: Card[], views: CardView[]): string {
+  const columns = cards.map((card, i) => {
+    const v = views[i] ?? "face";
+    return v === "back" ? hiddenLines() : v === "flip" ? flippingLines() : cardLines(card);
+  });
+  const lines: string[] = [];
+  for (let row = 0; row < 5; row++) lines.push(columns.map((col) => col[row]).join(""));
+  return "```ansi\n" + lines.join("\n") + "\n```";
+}
+
 /**
  * Render a hand as a colored ANSI code block of side-by-side cards.
  * `hideFrom` hides cards at that index and beyond (the dealer's hole card).
  */
 export function renderHand(cards: Card[], opts: { hideFrom?: number } = {}): string {
   const hideFrom = opts.hideFrom ?? Number.POSITIVE_INFINITY;
-  const columns = cards.map((card, i) => (i >= hideFrom ? hiddenLines() : cardLines(card)));
-  const lines: string[] = [];
-  for (let row = 0; row < 5; row++) lines.push(columns.map((col) => col[row]).join(""));
-  return "```ansi\n" + lines.join("\n") + "\n```";
+  return renderCards(
+    cards,
+    cards.map((_, i) => (i >= hideFrom ? "back" : "face")),
+  );
 }

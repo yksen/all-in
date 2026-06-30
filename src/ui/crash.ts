@@ -1,11 +1,12 @@
 /**
- * The crash multiplier rendered as a climbing curve on a BRAILLE sub-pixel canvas.
- * Discord gives us ~8 ANSI colors but the full Unicode glyph range, so we trade colour
- * for shape resolution: each braille char (U+2800–U+28FF) packs a 2×4 dot grid, turning a
- * 22×8 cell block into a 44×32 plot — a genuinely smooth line (the drawille/plotille trick).
- * The y-axis rescales to the current multiplier each frame, so the curve stays convex and
- * its tip rides the top — the "accelerating rocket" look. One heat colour per frame.
+ * The crash multiplier rendered as a climbing curve on a braille sub-pixel canvas
+ * (see `./braille.ts`). The y-axis rescales to the current multiplier each frame, so the
+ * curve stays convex and its tip rides the top — the "accelerating rocket" look. ANSI heat
+ * colour is a desktop bonus; the curve shape + the multiplier number carry the meaning, so
+ * it still reads on mobile where code-block colour is dropped.
  */
+
+import { BrailleCanvas } from "./braille.ts";
 
 const ESC = String.fromCharCode(27);
 const GREEN = `${ESC}[1;32m`;
@@ -18,35 +19,6 @@ const COLS = 22;
 const ROWS = 8;
 const PX = COLS * 2; // 44 sub-pixels wide
 const PY = ROWS * 4; // 32 sub-pixels tall
-
-/** Braille dot bit by sub-pixel (row 0..3, col 0..1) within a cell. */
-const DOT = [
-  [0x01, 0x08],
-  [0x02, 0x10],
-  [0x04, 0x20],
-  [0x40, 0x80],
-] as const;
-
-/** A 44×32 monochrome canvas that packs into a 22×8 grid of braille characters. */
-export class BrailleCanvas {
-  private cells = new Uint8Array(COLS * ROWS);
-
-  set(px: number, py: number): void {
-    if (px < 0 || px >= PX || py < 0 || py >= PY) return;
-    const cell = (py >> 2) * COLS + (px >> 1);
-    this.cells[cell]! |= DOT[py & 3]![px & 1]!;
-  }
-
-  rows(): string[] {
-    const out: string[] = [];
-    for (let cy = 0; cy < ROWS; cy++) {
-      let line = "";
-      for (let cx = 0; cx < COLS; cx++) line += String.fromCharCode(0x2800 + this.cells[cy * COLS + cx]!);
-      out.push(line);
-    }
-    return out;
-  }
-}
 
 /** Hotter as the multiplier climbs: green → yellow → red. */
 function heat(mult: number): string {

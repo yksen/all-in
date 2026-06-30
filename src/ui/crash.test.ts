@@ -1,30 +1,5 @@
 import { expect, test } from "bun:test";
-import { BrailleCanvas, renderCurve, renderExplosion } from "./crash.ts";
-
-test("braille: single top-left dot is U+2801 (⠁)", () => {
-  const c = new BrailleCanvas();
-  c.set(0, 0);
-  expect(c.rows()[0]![0]).toBe("⠁");
-});
-
-test("braille: all 8 dots of a cell is U+28FF (⣿)", () => {
-  const c = new BrailleCanvas();
-  for (let px = 0; px < 2; px++) for (let py = 0; py < 4; py++) c.set(px, py);
-  expect(c.rows()[0]![0]).toBe("⣿");
-});
-
-test("braille: empty cell is the blank braille char U+2800", () => {
-  const c = new BrailleCanvas();
-  expect(c.rows()[0]![0]).toBe("⠀");
-});
-
-test("braille: out-of-bounds writes are ignored (no throw)", () => {
-  const c = new BrailleCanvas();
-  c.set(-1, 0);
-  c.set(0, -1);
-  c.set(9999, 9999);
-  expect(c.rows()[0]![0]).toBe("⠀");
-});
+import { renderCurve, renderExplosion } from "./crash.ts";
 
 test("renderCurve: fenced ansi block, tip reaches the top row, start sits on the bottom row", () => {
   const k = Math.LN2 / 6;

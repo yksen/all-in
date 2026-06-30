@@ -11,7 +11,7 @@ import {
 } from "discord.js";
 import type { Command, ComponentHandler } from "../framework/types.ts";
 import type { Services } from "../services.ts";
-import { secureInt } from "./engine/rng.ts";
+import { intBetween } from "./engine/rng.ts";
 import { type SessionBase, SessionStore } from "../lib/sessions.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
 import { formatChips, formatSigned } from "../lib/money.ts";
@@ -21,12 +21,12 @@ import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
 import { replyError } from "../lib/reply.ts";
 import { sleep } from "../lib/sleep.ts";
-import { renderCoin } from "../ui/coinflip.ts";
+import { renderDice } from "../ui/dice.ts";
 
-const PREFIX = "cf";
-const CF = config.games.coinflip;
+const PREFIX = "dd";
+const DD = config.games.diceDuel;
 
-interface CoinflipSession extends SessionBase {
+interface DiceDuelSession extends SessionBase {
   guildId: string;
   channelId: string;
   challengerId: string;
@@ -37,43 +37,66 @@ interface CoinflipSession extends SessionBase {
   message?: Message;
 }
 
-let store: SessionStore<CoinflipSession>;
+let store: SessionStore<DiceDuelSession>;
 let servicesRef: Services;
 
-function getStore(services: Services): SessionStore<CoinflipSession> {
+function getStore(services: Services): SessionStore<DiceDuelSession> {
   servicesRef ??= services;
-  store ??= new SessionStore<CoinflipSession>(CF.challengeTimeoutSeconds * 1000, (s) => void onTimeout(s));
+  store ??= new SessionStore<DiceDuelSession>(DD.challengeTimeoutSeconds * 1000, (s) => void onTimeout(s));
   return store;
 }
 
-function refundChallenger(session: CoinflipSession, services: Services): void {
+/** Roll 2d6 for each side; reroll until the sums differ so there's always a winner. */
+export function duelRoll(): { a: [number, number]; b: [number, number]; aSum: number; bSum: number; challengerWins: boolean } {
+  for (;;) {
+    const a: [number, number] = [intBetween(1, 6), intBetween(1, 6)];
+    const b: [number, number] = [intBetween(1, 6), intBetween(1, 6)];
+    const aSum = a[0] + a[1];
+    const bSum = b[0] + b[1];
+    if (aSum !== bSum) return { a, b, aSum, bSum, challengerWins: aSum > bSum };
+  }
+}
+
+function refundChallenger(session: DiceDuelSession, services: Services): void {
   services.wallet.applyDelta({
     guildId: session.guildId,
     userId: session.challengerId,
     delta: session.stake,
     type: "payout",
-    game: "coinflip",
+    game: "diceduel",
     ref: session.id,
     meta: { refund: true },
   });
   services.wallet.closeGame(session.id); // only the challenger has escrow at this point
 }
 
-function legend(challengerId: string, opponentId: string): string {
-  return `🦅 **Heads** — <@${challengerId}>\n🌙 **Tails** — <@${opponentId}>`;
+function matchup(challengerId: string, opponentId: string): string {
+  return `🎲 <@${challengerId}> vs <@${opponentId}>`;
 }
 
-/** One frame of the spinning-coin animation; `squash` 1→0→1 makes it flip end-over-end. */
-function flipFrame(squash: number, challengerId: string, opponentId: string): EmbedBuilder {
+/** One frame of the rolling animation; pass real dice for the final reveal, random faces while tumbling. */
+function rollFrame(
+  challengerId: string,
+  opponentId: string,
+  a: [number, number],
+  b: [number, number],
+  title = "🎲 Rolling…",
+): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(Colors.gold)
-    .setTitle("🪙 Flipping…")
-    .setDescription(`${legend(challengerId, opponentId)}\n${renderCoin(squash)}`);
+    .setTitle(title)
+    .setDescription(
+      `${matchup(challengerId, opponentId)}\n\n` +
+        `<@${challengerId}>: ${renderDice(a)}\n` +
+        `<@${opponentId}>: ${renderDice(b)}`,
+    );
 }
+
+const randPair = (): [number, number] => [intBetween(1, 6), intBetween(1, 6)];
 
 /** Rematch buttons: same / half / double stake between the same two players. */
 function rematchRow(aId: string, bId: string, stake: number): ActionRowBuilder<ButtonBuilder> {
-  const buttons = replayStakes(stake, CF.minBet, CF.maxBet, "Rematch").map((o, i) =>
+  const buttons = replayStakes(stake, DD.minBet, DD.maxBet, "Rematch").map((o, i) =>
     new ButtonBuilder()
       .setCustomId(cid(PREFIX, "rematch", aId, bId, o.amt))
       .setLabel(o.label)
@@ -82,7 +105,7 @@ function rematchRow(aId: string, bId: string, stake: number): ActionRowBuilder<B
   return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 }
 
-async function onTimeout(session: CoinflipSession): Promise<void> {
+async function onTimeout(session: DiceDuelSession): Promise<void> {
   if (session.finished || !session.message) return;
   await servicesRef.locks.run(`${session.guildId}:${session.challengerId}`, async () => {
     if (session.finished) return;
@@ -90,7 +113,7 @@ async function onTimeout(session: CoinflipSession): Promise<void> {
     refundChallenger(session, servicesRef);
     const embed = new EmbedBuilder()
       .setColor(Colors.push)
-      .setTitle("🪙 Coinflip — challenge expired")
+      .setTitle("🎲 Dice duel — challenge expired")
       .setDescription(`⏱️ <@${session.opponentId}> didn't respond. The stake was refunded.`);
     await session.message!
       .edit({ embeds: [embed], components: [rematchRow(session.challengerId, session.opponentId, session.stake)] })
@@ -98,7 +121,7 @@ async function onTimeout(session: CoinflipSession): Promise<void> {
   });
 }
 
-async function startCoinflip(
+async function startDuel(
   interaction: ChatInputCommandInteraction<"cached"> | ButtonInteraction<"cached">,
   services: Services,
   opponentId: string,
@@ -116,7 +139,7 @@ async function startCoinflip(
         guildId: interaction.guildId,
         userId: challengerId,
         amount: stake,
-        game: "coinflip",
+        game: "diceduel",
         ref: id,
         channelId: interaction.channelId,
       });
@@ -128,7 +151,7 @@ async function startCoinflip(
       throw err;
     }
 
-    const session: CoinflipSession = {
+    const session: DiceDuelSession = {
       id,
       userId: challengerId,
       guildId: interaction.guildId,
@@ -147,10 +170,10 @@ async function startCoinflip(
     );
     const embed = new EmbedBuilder()
       .setColor(Colors.gold)
-      .setTitle("🪙 Coinflip challenge")
+      .setTitle("🎲 Dice duel challenge")
       .setDescription(
         `<@${challengerId}> challenges <@${opponentId}> for **${formatChips(stake)}**!\n\n` +
-          `Pot: **${formatChips(stake * 2)}** — winner takes all.\n` +
+          `Each rolls two dice — higher total wins. Pot: **${formatChips(stake * 2)}**, winner takes all.\n` +
           `<@${opponentId}>, do you accept?`,
       );
     await interaction.reply({
@@ -164,13 +187,13 @@ async function startCoinflip(
   });
 }
 
-export const coinflipCommand: Command = {
+export const diceDuelCommand: Command = {
   data: new SlashCommandBuilder()
-    .setName("coinflip")
-    .setDescription("Challenge another player to a coin flip for chips")
+    .setName("diceduel")
+    .setDescription("Challenge another player to a dice duel for chips (higher 2d6 total wins)")
     .addUserOption((o) => o.setName("opponent").setDescription("Who to challenge").setRequired(true))
     .addIntegerOption((o) =>
-      o.setName("stake").setDescription("Stake from each player").setRequired(true).setMinValue(CF.minBet).setMaxValue(CF.maxBet),
+      o.setName("stake").setDescription("Stake from each player").setRequired(true).setMinValue(DD.minBet).setMaxValue(DD.maxBet),
     ),
 
   async execute(interaction, services) {
@@ -184,11 +207,11 @@ export const coinflipCommand: Command = {
       await replyError(interaction, "You can't challenge yourself.");
       return;
     }
-    await startCoinflip(interaction, services, opponent.id, stake);
+    await startDuel(interaction, services, opponent.id, stake);
   },
 };
 
-export const coinflipComponent: ComponentHandler = {
+export const diceDuelComponent: ComponentHandler = {
   prefix: PREFIX,
   async handle(interaction, services) {
     if (!interaction.isButton()) return;
@@ -203,8 +226,8 @@ export const coinflipComponent: ComponentHandler = {
         await interaction.reply({ content: "Only the two players can start a rematch.", flags: MessageFlags.Ephemeral });
         return;
       }
-      const stake = Math.min(CF.maxBet, Math.max(CF.minBet, Number.parseInt(stakeStr ?? "0", 10)));
-      await startCoinflip(interaction, services, opponentId, stake);
+      const stake = Math.min(DD.maxBet, Math.max(DD.minBet, Number.parseInt(stakeStr ?? "0", 10)));
+      await startDuel(interaction, services, opponentId, stake);
       return;
     }
 
@@ -227,7 +250,7 @@ export const coinflipComponent: ComponentHandler = {
         getStore(services).delete(session.id);
         const embed = new EmbedBuilder()
           .setColor(Colors.push)
-          .setTitle("🪙 Coinflip — declined")
+          .setTitle("🎲 Dice duel — declined")
           .setDescription(`<@${session.opponentId}> declined. The stake was refunded.`);
         await interaction.update({
           embeds: [embed],
@@ -247,7 +270,7 @@ export const coinflipComponent: ComponentHandler = {
             guildId: session.guildId,
             userId: session.opponentId,
             amount: session.stake,
-            game: "coinflip",
+            game: "diceduel",
             ref: session.id,
           });
         } catch (err) {
@@ -264,7 +287,7 @@ export const coinflipComponent: ComponentHandler = {
         session.finished = true;
         getStore(services).delete(session.id);
 
-        const challengerWins = secureInt(2) === 0;
+        const { a, b, aSum, bSum, challengerWins } = duelRoll();
         const winnerId = challengerWins ? session.challengerId : session.opponentId;
         const loserId = challengerWins ? session.opponentId : session.challengerId;
         const prize = session.stake * 2; // winner takes the whole pot (no rake)
@@ -274,23 +297,23 @@ export const coinflipComponent: ComponentHandler = {
           userId: winnerId,
           delta: prize,
           type: "payout",
-          game: "coinflip",
+          game: "diceduel",
           ref: session.id,
         });
         services.wallet.closeGame(session.id);
 
         services.rounds.record({
-          game: "coinflip",
+          game: "diceduel",
           guildId: session.guildId,
           userId: winnerId,
           wager: session.stake,
           payout: prize,
           outcome: "win",
-          details: { opponent: loserId },
+          details: { opponent: loserId, rolls: { winner: challengerWins ? aSum : bSum, loser: challengerWins ? bSum : aSum } },
           startedAt: session.startedAt,
         });
         services.rounds.record({
-          game: "coinflip",
+          game: "diceduel",
           guildId: session.guildId,
           userId: loserId,
           wager: session.stake,
@@ -300,26 +323,27 @@ export const coinflipComponent: ComponentHandler = {
           startedAt: session.startedAt,
         });
 
-        // Spinning-coin animation (money is already settled above, so this is cosmetic).
+        // Tumbling-dice animation (money is already settled above, so this is cosmetic).
         await interaction.update({
           content: "",
-          embeds: [flipFrame(1, session.challengerId, session.opponentId)],
+          embeds: [rollFrame(session.challengerId, session.opponentId, randPair(), randPair())],
           components: [],
         });
-        for (let i = 1; i <= 8; i++) {
-          await sleep(190);
-          const squash = Math.abs(Math.cos(i * 0.7)); // flips end-over-end as it spins
-          await interaction.editReply({ embeds: [flipFrame(squash, session.challengerId, session.opponentId)] }).catch(() => {});
+        for (let i = 1; i <= 6; i++) {
+          await sleep(200);
+          await interaction
+            .editReply({ embeds: [rollFrame(session.challengerId, session.opponentId, randPair(), randPair())] })
+            .catch(() => {});
         }
 
-        const sideLabel = challengerWins ? "Heads 🦅" : "Tails 🌙";
         const embed = new EmbedBuilder()
           .setColor(Colors.win)
-          .setTitle("🪙 Coin flip — result")
+          .setTitle("🎲 Dice duel — result")
           .setDescription(
-            `${legend(session.challengerId, session.opponentId)}\n${renderCoin(1)}\n` +
-              `It landed on **${sideLabel}** — 🏆 <@${winnerId}> wins **${formatChips(prize)}**!\n` +
-              `<@${loserId}> loses ${formatChips(session.stake)}.`,
+            `${matchup(session.challengerId, session.opponentId)}\n\n` +
+              `<@${session.challengerId}>: ${renderDice(a)} = **${aSum}**\n` +
+              `<@${session.opponentId}>: ${renderDice(b)} = **${bSum}**\n\n` +
+              `🏆 <@${winnerId}> wins **${formatChips(prize)}**! <@${loserId}> loses ${formatChips(session.stake)}.`,
           )
           .addFields({ name: "Winner's net", value: formatSigned(prize - session.stake), inline: true });
         await interaction.editReply({

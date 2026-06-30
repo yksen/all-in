@@ -9,6 +9,7 @@ import { componentHandlers } from "./interactions/index.ts";
 import { VoiceTracker } from "./economy/voiceTracker.ts";
 import { resumeRouletteTables } from "./games/roulette.ts";
 import { resumeCrashTables } from "./games/crash.ts";
+import { resumeCrapsTables } from "./games/craps.ts";
 import { parseCid } from "./lib/ids.ts";
 import { replyError } from "./lib/reply.ts";
 import { runBackup, runRestore } from "./maintenance/backup.ts";
@@ -46,6 +47,7 @@ client.once(Events.ClientReady, async (c) => {
   await recoverInterruptedGames();
   await resumeRouletteTables(services, client);
   await resumeCrashTables(services, client);
+  await resumeCrapsTables(services, client);
 });
 
 /**

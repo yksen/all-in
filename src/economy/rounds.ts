@@ -96,14 +96,19 @@ export class Rounds {
   }
 
   topBalances(guildId: string, limit: number): TopBalanceRow[] {
+    // Include busted players (0 chips) who still have a lifetime net to show.
+    // net is a derived alias, so the filter lives in an outer wrapper.
     return this.db
       .query(
-        `SELECT u.user_id, u.balance,
-                COALESCE((SELECT SUM(g.net) FROM game_rounds g
-                          WHERE g.guild_id = u.guild_id AND g.user_id = u.user_id), 0) AS net
-         FROM users u
-         WHERE u.guild_id = ? AND u.balance > 0
-         ORDER BY u.balance DESC, u.user_id ASC LIMIT ?`,
+        `SELECT * FROM (
+           SELECT u.user_id, u.balance,
+                  COALESCE((SELECT SUM(g.net) FROM game_rounds g
+                            WHERE g.guild_id = u.guild_id AND g.user_id = u.user_id), 0) AS net
+           FROM users u
+           WHERE u.guild_id = ?
+         )
+         WHERE balance > 0 OR net <> 0
+         ORDER BY balance DESC, user_id ASC LIMIT ?`,
       )
       .all(guildId, limit) as TopBalanceRow[];
   }

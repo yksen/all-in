@@ -149,6 +149,12 @@ export const config = {
       maxBet: 50_000,
       challengeTimeoutSeconds: 120,
     },
+    /** PvP dice duel: each player rolls 2d6, higher total wins the pot. Same shape as coinflip. */
+    diceDuel: {
+      minBet: 10,
+      maxBet: 50_000,
+      challengeTimeoutSeconds: 120,
+    },
     /**
      * Crash is a persistent, always-on table an admin installs on a channel (like
      * roulette). Each round: a betting window, then a multiplier that climbs from 1.00x
@@ -177,6 +183,28 @@ export const config = {
       houseEdge: 0.01,
       /** Crash multiplier cap; also bounds the longest possible flight (~34s at 50x). */
       maxMultiplier: 50,
+    },
+    /**
+     * Simplified craps: a persistent, always-on table an admin installs on a channel
+     * (like roulette/crash). Each round has a betting window, then a come-out roll and an
+     * optional point phase that rolls until the point or a seven-out.
+     */
+    craps: {
+      minBet: 10,
+      maxBet: 5_000,
+      /** Cap on the sum of one player's bets in a single round. */
+      maxTotalBetPerRound: 20_000,
+      /** Length of the betting window before the come-out roll. */
+      bettingSeconds: 20,
+      /** Seconds between point-phase rolls. */
+      rollIntervalSeconds: 3,
+      /** Repost the table near the bottom of the channel this many seconds before a roll
+       *  (only when there are bets that round) so it doesn't get lost in chat. */
+      repostLeadSeconds: 10,
+      /** Pause showing the result after a round resolves before the next betting window. */
+      cooldownSeconds: 6,
+      /** How many past round results to keep in the table's history strip. */
+      historyLength: 10,
     },
   },
 

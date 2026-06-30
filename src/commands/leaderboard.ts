@@ -16,7 +16,7 @@ export const leaderboard: Command = {
       return;
     }
 
-    const top = rows[0]!.balance;
+    const top = rows[0]!.balance || 1; // avoid /0 NaN when every listed player is busted
     const amountStrs = rows.map((r) => formatNumber(r.balance));
     const netStrs = rows.map((r) => (r.net >= 0 ? "+" : "") + formatNumber(r.net));
     const amountW = Math.max(...amountStrs.map((s) => s.length));
