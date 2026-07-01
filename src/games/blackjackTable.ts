@@ -16,7 +16,7 @@ import type { ComponentHandler } from "../framework/types.ts";
 import type { Services } from "../services.ts";
 import { type Card, Shoe } from "./engine/deck.ts";
 import { handTotal, isBlackjack, isBust } from "./engine/handvalue.ts";
-import { canSplit, dealerShouldHit, firstUnfinished, type Hand, makeHand, OUTCOME_LABEL, settleHand } from "./engine/blackjack.ts";
+import { canSplit, dealerShouldHit, firstUnfinished, type Hand, makeHand, settleHand } from "./engine/blackjack.ts";
 import { dealerField, handField } from "../ui/blackjack.ts";
 import { type CardView, renderCards } from "../ui/cards.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
@@ -60,6 +60,9 @@ interface LiveBlackjackTable {
   /** Each user's bet amounts from their last completed round (seat order), for the
    *  Repeat button. Survives idle resets; only touched by users who actually played. */
   lastBets: Map<string, number[]>;
+  /** Net winners (net > 0, aggregated per user across all their seats) from the most
+   *  recent round that settled. Left intact through idle rounds, like the other tables. */
+  lastWinners?: { userId: string; net: number }[];
   /** Set when the table is torn down so an in-flight animation bails out. */
   closed?: boolean;
   dealTimer?: ReturnType<typeof setTimeout>;
@@ -107,6 +110,17 @@ function seatsField(table: LiveBlackjackTable): string {
     .join("\n");
 }
 
+/** Net winners of a round, medalled — same convention as roulette/craps. */
+function winnersField(winners: { userId: string; net: number }[]): string {
+  if (winners.length === 0) return "No winners — the house took the round. 🏦";
+  const medals = ["🥇", "🥈", "🥉"];
+  return winners
+    .slice(0, 10)
+    .map((w, i) => `${medals[i] ?? "🏆"} <@${w.userId}> ${formatSigned(w.net)}`)
+    .join("\n")
+    .slice(0, 1024);
+}
+
 function closedEmbed(): EmbedBuilder {
   return new EmbedBuilder().setColor(Colors.push).setTitle("🃏 Blackjack — closed").setDescription("This table is closed.");
 }
@@ -122,6 +136,7 @@ function tableEmbed(table: LiveBlackjackTable): EmbedBuilder {
   if (table.phase === "betting") {
     embed.addFields({ name: "Round starts", value: `<t:${Math.floor(table.bettingEndsAt / 1000)}:R>` });
   }
+  if (table.lastWinners) embed.addFields({ name: "🏆 Last round", value: winnersField(table.lastWinners) });
   return embed.setFooter({
     text: `Min ${BJ.minBet} • Max ${BJ.maxBet}/seat • Same rules as /blackjack (3:2 blackjack, dealer hits soft 17)`,
   });
@@ -231,10 +246,10 @@ function dealerRevealEmbed(table: LiveBlackjackTable, dealerCards: Card[]): Embe
   return embed;
 }
 
-function resultEmbed(table: LiveBlackjackTable, lines: string[]): EmbedBuilder {
+function resultEmbed(table: LiveBlackjackTable): EmbedBuilder {
   return dealerRevealEmbed(table, table.dealer).addFields({
-    name: "Results",
-    value: lines.length ? lines.join("\n").slice(0, 1024) : "_No seats this round._",
+    name: "🏆 Winners",
+    value: winnersField(table.lastWinners ?? []),
   });
 }
 
@@ -396,17 +411,21 @@ async function onTurnTimeout(table: LiveBlackjackTable, services: Services): Pro
   if (needsDealer) await runDealerAndSettle(table, services);
 }
 
-/** Pay out every seat/hand against the resolved dealer and record stats. Caller holds the lock. */
-function settle(table: LiveBlackjackTable, services: Services): string[] {
-  const lines: string[] = [];
+/** Pay out every seat/hand against the resolved dealer, record stats, and set
+ *  `table.lastWinners` (net > 0, aggregated per user across all their seats). Caller
+ *  holds the lock. */
+function settle(table: LiveBlackjackTable, services: Services): void {
+  const netByUser = new Map<string, number>();
   for (let s = 0; s < table.seats.length; s++) {
     const seat = table.seats[s];
     if (!seat) continue;
     let seatReturn = 0;
+    let seatBet = 0;
     for (let h = 0; h < seat.hands.length; h++) {
       const hand = seat.hands[h]!;
       const { ret, outcome } = settleHand(hand, table.dealer);
       seatReturn += ret;
+      seatBet += hand.bet;
       services.rounds.record({
         game: GAME,
         guildId: table.guildId,
@@ -417,15 +436,18 @@ function settle(table: LiveBlackjackTable, services: Services): string[] {
         details: { seat: s + 1, hand: h + 1, fromSplit: hand.fromSplit, doubled: hand.doubled },
         startedAt: table.roundStartedAt,
       });
-      const label = seat.hands.length > 1 ? `Seat ${s + 1} • Hand ${h + 1}` : `Seat ${s + 1}`;
-      lines.push(`${label} <@${seat.userId}> — ${OUTCOME_LABEL[outcome]} • ${formatSigned(ret - hand.bet)}`);
     }
     if (seatReturn > 0) {
       services.wallet.applyDelta({ guildId: table.guildId, userId: seat.userId, delta: seatReturn, type: "payout", game: GAME, ref: table.roundId });
     }
+    netByUser.set(seat.userId, (netByUser.get(seat.userId) ?? 0) + seatReturn - seatBet);
   }
   services.wallet.closeGame(table.roundId);
-  return lines;
+
+  table.lastWinners = [...netByUser.entries()]
+    .filter(([, net]) => net > 0)
+    .map(([userId, net]) => ({ userId, net }))
+    .sort((a, b) => b.net - a.net);
 }
 
 /** Remember each player's bets this round for the Repeat button, then reset to idle.
@@ -478,15 +500,14 @@ async function runDealerAndSettle(table: LiveBlackjackTable, services: Services)
   await sleep(steps.length > 1 ? 600 : 350);
   if (table.closed) return;
 
-  let resultLines: string[] = [];
   await services.locks.run(`${PREFIX}:${table.channelId}`, async () => {
     if (table.closed) return;
-    resultLines = settle(table, services);
+    settle(table, services);
     table.phase = "cooldown";
   });
   if (table.closed) return;
 
-  await table.message?.edit({ embeds: [resultEmbed(table, resultLines)], components: [] }).catch(() => {});
+  await table.message?.edit({ embeds: [resultEmbed(table)], components: [] }).catch(() => {});
   await sleep(BJ.tableCooldownSeconds * 1000);
   if (table.closed) return;
   await services.locks.run(`${PREFIX}:${table.channelId}`, async () => {
