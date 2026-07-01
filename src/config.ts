@@ -124,7 +124,7 @@ export const config = {
       /** Seats at the persistent multiplayer table (an admin-installed channel table). */
       tableSeats: 5,
       /** Betting window after the first seat's bet, before the table deals. */
-      tableBettingSeconds: 20,
+      tableBettingSeconds: 15,
       /** Per-turn timer; an idle seat is auto-stood when it expires. */
       tableActionSeconds: 20,
       /** Pause showing the result before the table resets for the next round. */

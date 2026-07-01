@@ -39,6 +39,8 @@ interface CrashBet {
   allIn?: boolean;
   /** Multiplier locked in, set when the player cashes out (undefined = still riding). */
   cashedOutAt?: number;
+  /** Pre-set target; game auto-cashes out when mult ≥ this. */
+  autoCashout?: number;
 }
 
 /** A persistent, always-on crash table installed on one channel. */
@@ -81,7 +83,7 @@ function bettingEmbed(table: LiveCrashTable): EmbedBuilder {
   const bettors = [...table.bets.entries()];
   const list = bettors.length
     ? bettors
-        .map(([uid, b]) => `• <@${uid}> — ${formatChips(b.amount)}`)
+        .map(([uid, b]) => `• <@${uid}> — ${formatChips(b.amount)}${b.autoCashout != null ? ` → auto @${b.autoCashout.toFixed(2)}x` : ""}`)
         .join("\n")
         .slice(0, 1024)
     : "_Place your bets!_";
@@ -107,7 +109,7 @@ function flyingEmbed(table: LiveCrashTable, mult: number, frame = 0): EmbedBuild
   const cashed = entries.filter(([, b]) => b.cashedOutAt != null);
   const ridingText = riding.length
     ? riding
-        .map(([uid, b]) => `• <@${uid}> ${formatChips(b.amount)} → **${formatChips(Math.floor(b.amount * mult))}**`)
+        .map(([uid, b]) => `• <@${uid}> ${formatChips(b.amount)} → **${formatChips(Math.floor(b.amount * mult))}**${b.autoCashout != null ? ` _(auto @${b.autoCashout.toFixed(2)}x)_` : ""}`)
         .join("\n")
         .slice(0, 1024)
     : "_everyone cashed out_";
@@ -297,6 +299,17 @@ async function runRound(table: LiveCrashTable, services: Services): Promise<void
     const elapsed = Date.now() - table.flightStartedAt;
     if (elapsed >= crashMs) break;
     const mult = multiplierAt(k, elapsed / 1000);
+    // Auto-cashout: tick may skip over a target (e.g. 1.90→2.10 with target 2.00), so
+    // we pay the player at their exact target, not the current tick value.
+    for (const [userId, bet] of table.bets) {
+      if (bet.cashedOutAt == null && bet.autoCashout != null && mult >= bet.autoCashout) {
+        await services.locks.run(lockKey(table), () => {
+          if (table.closed || table.phase !== "flying") return;
+          if (bet.cashedOutAt != null) return; // manual cashout raced us
+          doCashout(table, userId, bet, bet.autoCashout!, services);
+        });
+      }
+    }
     void table.message?.edit({ embeds: [flyingEmbed(table, mult, frame)], components: [cashOutRow(table)] }).catch(() => {});
     frame++;
     await sleep(C.refreshMs);
@@ -460,11 +473,38 @@ export async function stopCrashTable(interaction: ChatInputCommandInteraction<"c
 
 // --- placing bets / cashing out ---------------------------------------------
 
+/** Settle a cashout. Must be called under the channel lock with phase === "flying". */
+function doCashout(table: LiveCrashTable, userId: string, bet: CrashBet, payoutMult: number, services: Services): void {
+  const payout = Math.floor(bet.amount * payoutMult);
+  services.wallet.applyDelta({
+    guildId: table.guildId,
+    userId,
+    delta: payout,
+    type: "payout",
+    game: "crash",
+    ref: table.roundId,
+    meta: { mult: payoutMult },
+  });
+  services.wallet.trackEscrow({ ref: table.roundId, userId, guildId: table.guildId, game: "crash", amount: 0 });
+  bet.cashedOutAt = payoutMult;
+  services.rounds.record({
+    game: "crash",
+    guildId: table.guildId,
+    userId,
+    wager: bet.amount,
+    payout,
+    outcome: "win",
+    details: { cashedAt: payoutMult, crashPoint: table.crashPoint, allIn: bet.allIn },
+    startedAt: table.flightStartedAt,
+  });
+}
+
 async function placeBet(
   interaction: ButtonInteraction<"cached"> | ModalSubmitInteraction<"cached">,
   table: LiveCrashTable,
   services: Services,
   stake: number | "max",
+  autoCashout?: number,
 ): Promise<void> {
   const userId = interaction.user.id;
   await services.locks.run(lockKey(table), async () => {
@@ -501,7 +541,7 @@ async function placeBet(
       throw err;
     }
 
-    table.bets.set(userId, { amount, allIn: stake === "max" });
+    table.bets.set(userId, { amount, allIn: stake === "max", autoCashout });
     refreshMessage(table);
     await interaction.deferUpdate(); // bet shows on the panel; just ack silently so Discord doesn't flag a failed interaction
   });
@@ -533,6 +573,14 @@ export const crashComponent: ComponentHandler = {
             .setStyle(TextInputStyle.Short)
             .setRequired(true),
         ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("autocashout")
+            .setLabel("Auto cash-out at (e.g. 2.00) — blank = manual")
+            .setPlaceholder(`1.01 – ${C.maxMultiplier}`)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false),
+        ),
       );
       await interaction.showModal(modal);
       return;
@@ -546,7 +594,17 @@ export const crashComponent: ComponentHandler = {
         await interaction.reply({ content: `Amount must be between ${C.minBet} and ${C.maxBet}, or "all in".`, flags: MessageFlags.Ephemeral });
         return;
       }
-      await placeBet(interaction, table, services, wantsMax ? "max" : typed);
+      const rawAuto = interaction.fields.getTextInputValue("autocashout").trim();
+      let autoCashout: number | undefined;
+      if (rawAuto) {
+        const parsed = parseFloat(rawAuto.replace(/x$/i, ""));
+        if (isNaN(parsed) || parsed < 1.01 || parsed > C.maxMultiplier) {
+          await interaction.reply({ content: `Auto cash-out must be between 1.01x and ${C.maxMultiplier}x.`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        autoCashout = Math.round(parsed * 100) / 100;
+      }
+      await placeBet(interaction, table, services, wantsMax ? "max" : typed, autoCashout);
       return;
     }
 
@@ -572,31 +630,8 @@ export const crashComponent: ComponentHandler = {
           return;
         }
 
-        const payoutMult = Math.floor(mult * 100) / 100; // what the player sees, floored to 2dp
-        const payout = Math.floor(bet.amount * payoutMult);
-        services.wallet.applyDelta({
-          guildId: table.guildId,
-          userId: interaction.user.id,
-          delta: payout,
-          type: "payout",
-          game: "crash",
-          ref: table.roundId,
-          meta: { mult: payoutMult },
-        });
-        services.wallet.trackEscrow({ ref: table.roundId, userId: interaction.user.id, guildId: table.guildId, game: "crash", amount: 0 });
-        bet.cashedOutAt = payoutMult;
-
-        services.rounds.record({
-          game: "crash",
-          guildId: table.guildId,
-          userId: interaction.user.id,
-          wager: bet.amount,
-          payout,
-          outcome: "win",
-          details: { cashedAt: payoutMult, crashPoint: table.crashPoint, allIn: bet.allIn },
-          startedAt: table.flightStartedAt,
-        });
-
+        const payoutMult = Math.floor(mult * 100) / 100; // floored to 2dp — what the player sees
+        doCashout(table, interaction.user.id, bet, payoutMult, services);
         await interaction.deferUpdate(); // the cash-out shows on the panel; just ack silently
       });
       return;
