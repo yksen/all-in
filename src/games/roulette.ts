@@ -17,8 +17,9 @@ import type { ComponentHandler } from "../framework/types.ts";
 import type { Services } from "../services.ts";
 import { type BetDef, OUTSIDE_BETS, resolveInsideBet, returnFor, spin, WHEEL_SEQUENCE } from "./engine/roulette.ts";
 import { historyStrip, renderGrid, renderReel, resultLine } from "../ui/roulette.ts";
+import { type BettorResult, resultsField } from "../ui/roundResults.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
-import { formatChips, formatNumber, formatSigned } from "../lib/money.ts";
+import { formatChips, formatNumber } from "../lib/money.ts";
 import { Colors } from "../ui/theme.ts";
 import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
@@ -44,8 +45,9 @@ interface LiveTable {
   bets: Map<string, PlacedBet[]>;
   history: number[];
   lastResult: number | null;
-  /** Net winners of the most recent round that had bets, sorted high→low. */
-  lastWinners?: { userId: string; net: number }[];
+  /** Every bettor's net + resulting balance from the most recent round that had bets,
+   *  sorted net high→low. */
+  lastResults?: BettorResult[];
   spinning: boolean;
   repostTimer?: ReturnType<typeof setTimeout>;
   spinTimer?: ReturnType<typeof setTimeout>;
@@ -73,17 +75,6 @@ const BET_OPTIONS = [
 
 // --- rendering --------------------------------------------------------------
 
-/** "🥇 @user +1,500" lines for the last round's winners, or a house-won note. */
-function winnersField(winners: { userId: string; net: number }[]): string {
-  if (winners.length === 0) return "No winners — the house took the round. 🏦";
-  const medals = ["🥇", "🥈", "🥉"];
-  return winners
-    .slice(0, 10)
-    .map((w, i) => `${medals[i] ?? "🏆"} <@${w.userId}> ${formatSigned(w.net)}`)
-    .join("\n")
-    .slice(0, 1024);
-}
-
 function tableEmbed(table: LiveTable): EmbedBuilder {
   const bettors = [...table.bets.entries()];
   const betsField = bettors.length
@@ -107,8 +98,8 @@ function tableEmbed(table: LiveTable): EmbedBuilder {
       { name: "Recent", value: historyStrip(table.history) },
     );
 
-  // Winners of the most recent round that actually had bets (skipped for empty auto-spins).
-  if (table.lastWinners) embed.addFields({ name: "🏆 Last round", value: winnersField(table.lastWinners) });
+  // Results of the most recent round that actually had bets (skipped for empty auto-spins).
+  if (table.lastResults) embed.addFields({ name: "💰 Last round", value: resultsField(table.lastResults) });
 
   return embed
     .addFields({ name: "Bets this round", value: betsField })
@@ -148,7 +139,7 @@ function performSpin(table: LiveTable, services: Services, forced?: number): voi
   try {
     const result = forced ?? spin();
     const hadBets = table.bets.size > 0;
-    const winners: { userId: string; net: number }[] = [];
+    const results: BettorResult[] = [];
     for (const [userId, bets] of table.bets) {
       const staked = bets.reduce((s, b) => s + b.amount, 0);
       let returned = 0;
@@ -164,7 +155,7 @@ function performSpin(table: LiveTable, services: Services, forced?: number): voi
         });
       }
       const net = returned - staked;
-      if (net > 0) winners.push({ userId, net });
+      results.push({ userId, net, balance: services.wallet.getBalance(table.guildId, userId) });
       services.rounds.record({
         game: "roulette",
         guildId: table.guildId,
@@ -178,11 +169,11 @@ function performSpin(table: LiveTable, services: Services, forced?: number): voi
     }
     services.wallet.closeGame(table.roundId);
 
-    // Remember winners only for rounds that had action, so the panel doesn't get wiped
+    // Remember results only for rounds that had action, so the panel doesn't get wiped
     // by the empty auto-spins that happen when nobody's betting.
     if (hadBets) {
-      winners.sort((a, b) => b.net - a.net);
-      table.lastWinners = winners;
+      results.sort((a, b) => b.net - a.net);
+      table.lastResults = results;
     }
 
     table.lastResult = result;

@@ -18,6 +18,7 @@ import type { ComponentHandler } from "../framework/types.ts";
 import type { Services } from "../services.ts";
 import { growthRate, multiplierAt, rollCrashPoint, timeToReach } from "./engine/crash.ts";
 import { renderCurve, renderExplosion } from "../ui/crash.ts";
+import { type BettorResult, resultsField } from "../ui/roundResults.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
 import { formatChips, formatNumber } from "../lib/money.ts";
 import { Colors } from "../ui/theme.ts";
@@ -55,6 +56,9 @@ interface LiveCrashTable {
   crashPoint: number;
   /** Recent crash multipliers, newest first. */
   history: number[];
+  /** Every bettor's net + resulting balance from the most recent round that had bets,
+   *  sorted net high→low. */
+  lastResults?: BettorResult[];
   /** Set on stop/re-setup so the in-flight loop bails instead of settling. */
   closed: boolean;
   timer?: ReturnType<typeof setTimeout>;
@@ -81,7 +85,7 @@ function bettingEmbed(table: LiveCrashTable): EmbedBuilder {
         .join("\n")
         .slice(0, 1024)
     : "_Place your bets!_";
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(Colors.table)
     .setTitle("🚀 Crash — place your bets")
     .setDescription(
@@ -91,8 +95,9 @@ function bettingEmbed(table: LiveCrashTable): EmbedBuilder {
     .addFields(
       { name: "Bets this round", value: list },
       { name: "Recent crashes", value: crashHistory(table.history) },
-    )
-    .setFooter({ text: `Min ${C.minBet} • Max ${C.maxBet} • one bet per round` });
+    );
+  if (table.lastResults) embed.addFields({ name: "💰 Last round", value: resultsField(table.lastResults) });
+  return embed.setFooter({ text: `Min ${C.minBet} • Max ${C.maxBet} • one bet per round` });
 }
 
 function flyingEmbed(table: LiveCrashTable, mult: number, frame = 0): EmbedBuilder {
@@ -126,19 +131,12 @@ function flyingEmbed(table: LiveCrashTable, mult: number, frame = 0): EmbedBuild
 
 function crashedEmbed(table: LiveCrashTable): EmbedBuilder {
   const crashMs = timeToReach(k, table.crashPoint) * 1000;
-  const cashed = [...table.bets.entries()].filter(([, b]) => b.cashedOutAt != null);
-  const winnersText = cashed.length
-    ? cashed
-        .map(([uid, b]) => `✅ <@${uid}> @${b.cashedOutAt!.toFixed(2)}x **+${formatChips(Math.floor(b.amount * b.cashedOutAt!))}**`)
-        .join("\n")
-        .slice(0, 1024)
-    : "Nobody cashed out in time — the house took the round. 🏦";
   return new EmbedBuilder()
     .setColor(Colors.loss)
     .setTitle(`💥 Crashed at ${table.crashPoint.toFixed(2)}x`)
     .setDescription(`${renderCurve(table.crashPoint, k, crashMs / 1000)}\n💥 **${table.crashPoint.toFixed(2)}x**`)
     .addFields(
-      { name: "Cashed out in time", value: winnersText },
+      { name: "💰 Results", value: resultsField(table.lastResults ?? []) },
       { name: "Recent crashes", value: crashHistory(table.history) },
     );
 }
@@ -190,8 +188,14 @@ function recordCrash(table: LiveCrashTable, crashPoint: number): void {
 }
 
 function settleCrash(table: LiveCrashTable, services: Services): void {
+  const results: BettorResult[] = [];
   for (const [userId, bet] of table.bets) {
-    if (bet.cashedOutAt != null) continue; // winners were paid + escrow-cleared at cash-out
+    if (bet.cashedOutAt != null) {
+      // Winners were already paid + recorded at cash-out time — just report their net.
+      const payout = Math.floor(bet.amount * bet.cashedOutAt);
+      results.push({ userId, net: payout - bet.amount, balance: services.wallet.getBalance(table.guildId, userId) });
+      continue;
+    }
     services.rounds.record({
       game: "crash",
       guildId: table.guildId,
@@ -202,8 +206,11 @@ function settleCrash(table: LiveCrashTable, services: Services): void {
       details: { crashPoint: table.crashPoint, allIn: bet.allIn },
       startedAt: table.flightStartedAt,
     });
+    results.push({ userId, net: -bet.amount, balance: services.wallet.getBalance(table.guildId, userId) });
   }
   services.wallet.closeGame(table.roundId); // drop the losers' escrow rows — the house keeps the chips
+  results.sort((a, b) => b.net - a.net);
+  table.lastResults = results;
   recordCrash(table, table.crashPoint);
 }
 

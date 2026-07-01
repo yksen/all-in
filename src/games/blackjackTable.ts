@@ -19,8 +19,9 @@ import { handTotal, isBlackjack, isBust } from "./engine/handvalue.ts";
 import { canSplit, dealerShouldHit, firstUnfinished, type Hand, makeHand, settleHand } from "./engine/blackjack.ts";
 import { dealerField, handField } from "../ui/blackjack.ts";
 import { type CardView, renderCards } from "../ui/cards.ts";
+import { type BettorResult, resultsField } from "../ui/roundResults.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
-import { formatChips, formatNumber, formatSigned } from "../lib/money.ts";
+import { formatChips, formatNumber } from "../lib/money.ts";
 import { Colors } from "../ui/theme.ts";
 import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
@@ -60,9 +61,10 @@ interface LiveBlackjackTable {
   /** Each user's bet amounts from their last completed round (seat order), for the
    *  Repeat button. Survives idle resets; only touched by users who actually played. */
   lastBets: Map<string, number[]>;
-  /** Net winners (net > 0, aggregated per user across all their seats) from the most
-   *  recent round that settled. Left intact through idle rounds, like the other tables. */
-  lastWinners?: { userId: string; net: number }[];
+  /** Every bettor's net + resulting balance (aggregated per user across all their seats)
+   *  from the most recent round that settled. Left intact through idle rounds, like the
+   *  other tables. */
+  lastResults?: BettorResult[];
   /** Set when the table is torn down so an in-flight animation bails out. */
   closed?: boolean;
   dealTimer?: ReturnType<typeof setTimeout>;
@@ -110,17 +112,6 @@ function seatsField(table: LiveBlackjackTable): string {
     .join("\n");
 }
 
-/** Net winners of a round, medalled — same convention as roulette/craps. */
-function winnersField(winners: { userId: string; net: number }[]): string {
-  if (winners.length === 0) return "No winners — the house took the round. 🏦";
-  const medals = ["🥇", "🥈", "🥉"];
-  return winners
-    .slice(0, 10)
-    .map((w, i) => `${medals[i] ?? "🏆"} <@${w.userId}> ${formatSigned(w.net)}`)
-    .join("\n")
-    .slice(0, 1024);
-}
-
 function closedEmbed(): EmbedBuilder {
   return new EmbedBuilder().setColor(Colors.push).setTitle("🃏 Blackjack — closed").setDescription("This table is closed.");
 }
@@ -136,7 +127,7 @@ function tableEmbed(table: LiveBlackjackTable): EmbedBuilder {
   if (table.phase === "betting") {
     embed.addFields({ name: "Round starts", value: `<t:${Math.floor(table.bettingEndsAt / 1000)}:R>` });
   }
-  if (table.lastWinners) embed.addFields({ name: "🏆 Last round", value: winnersField(table.lastWinners) });
+  if (table.lastResults) embed.addFields({ name: "💰 Last round", value: resultsField(table.lastResults) });
   return embed.setFooter({
     text: `Min ${BJ.minBet} • Max ${BJ.maxBet}/seat • Same rules as /blackjack (3:2 blackjack, dealer hits soft 17)`,
   });
@@ -248,8 +239,8 @@ function dealerRevealEmbed(table: LiveBlackjackTable, dealerCards: Card[]): Embe
 
 function resultEmbed(table: LiveBlackjackTable): EmbedBuilder {
   return dealerRevealEmbed(table, table.dealer).addFields({
-    name: "🏆 Winners",
-    value: winnersField(table.lastWinners ?? []),
+    name: "💰 Results",
+    value: resultsField(table.lastResults ?? []),
   });
 }
 
@@ -412,8 +403,8 @@ async function onTurnTimeout(table: LiveBlackjackTable, services: Services): Pro
 }
 
 /** Pay out every seat/hand against the resolved dealer, record stats, and set
- *  `table.lastWinners` (net > 0, aggregated per user across all their seats). Caller
- *  holds the lock. */
+ *  `table.lastResults` (net + resulting balance, aggregated per user across all their
+ *  seats). Caller holds the lock. */
 function settle(table: LiveBlackjackTable, services: Services): void {
   const netByUser = new Map<string, number>();
   for (let s = 0; s < table.seats.length; s++) {
@@ -444,9 +435,9 @@ function settle(table: LiveBlackjackTable, services: Services): void {
   }
   services.wallet.closeGame(table.roundId);
 
-  table.lastWinners = [...netByUser.entries()]
-    .filter(([, net]) => net > 0)
-    .map(([userId, net]) => ({ userId, net }))
+  // Balance is read once per user, after all of their seats' payouts are applied above.
+  table.lastResults = [...netByUser.entries()]
+    .map(([userId, net]) => ({ userId, net, balance: services.wallet.getBalance(table.guildId, userId) }))
     .sort((a, b) => b.net - a.net);
 }
 

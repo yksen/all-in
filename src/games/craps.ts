@@ -25,8 +25,9 @@ import {
   rollPair,
 } from "./engine/craps.ts";
 import { renderDice } from "../ui/dice.ts";
+import { type BettorResult, resultsField } from "../ui/roundResults.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
-import { formatChips, formatNumber, formatSigned } from "../lib/money.ts";
+import { formatChips, formatNumber } from "../lib/money.ts";
 import { Colors } from "../ui/theme.ts";
 import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
@@ -58,8 +59,9 @@ interface LiveCrapsTable {
   phase: Phase;
   /** Set when the table is torn down so an in-flight round bails out of its loop. */
   closed?: boolean;
-  /** Net winners of the most recent round that had bets, sorted high→low. */
-  lastWinners?: { userId: string; net: number }[];
+  /** Every bettor's net + resulting balance from the most recent round that had bets,
+   *  sorted net high→low. */
+  lastResults?: BettorResult[];
   repostTimer?: ReturnType<typeof setTimeout>;
   rollTimer?: ReturnType<typeof setTimeout>;
 }
@@ -70,16 +72,6 @@ let servicesRef: Services;
 const randFace = (): number => intBetween(1, 6);
 
 // --- rendering --------------------------------------------------------------
-
-function winnersField(winners: { userId: string; net: number }[]): string {
-  if (winners.length === 0) return "No winners — the house took the round. 🏦";
-  const medals = ["🥇", "🥈", "🥉"];
-  return winners
-    .slice(0, 10)
-    .map((w, i) => `${medals[i] ?? "🏆"} <@${w.userId}> ${formatSigned(w.net)}`)
-    .join("\n")
-    .slice(0, 1024);
-}
 
 function betsField(table: LiveCrapsTable): string {
   const bettors = [...table.bets.entries()];
@@ -106,7 +98,7 @@ function tableEmbed(table: LiveCrapsTable): EmbedBuilder {
       { name: "Come-out roll", value: `<t:${Math.floor(table.bettingEndsAt / 1000)}:R>`, inline: true },
       { name: "Recent", value: table.history.length ? table.history.join("  ") : "—", inline: true },
     );
-  if (table.lastWinners) embed.addFields({ name: "🏆 Last round", value: winnersField(table.lastWinners) });
+  if (table.lastResults) embed.addFields({ name: "💰 Last round", value: resultsField(table.lastResults) });
   return embed
     .addFields({ name: "Bets this round", value: betsField(table) })
     .setFooter({
@@ -139,7 +131,7 @@ function resultEmbed(table: LiveCrapsTable, label: string, d1: number, d2: numbe
     .setColor(Colors.win)
     .setTitle("🎲 Craps — round over")
     .setDescription(`# ${renderDice([d1, d2])}  =  **${d1 + d2}**\n${label}`)
-    .addFields({ name: "🏆 Winners", value: winnersField(table.lastWinners ?? []) });
+    .addFields({ name: "💰 Results", value: resultsField(table.lastResults ?? []) });
 }
 
 function refreshMessage(table: LiveCrapsTable): void {
@@ -196,7 +188,7 @@ async function animateRoll(table: LiveCrapsTable, d1: number, d2: number, title:
 
 /** Pay out every bet against the resolved round and record stats. Caller holds the lock. */
 function settle(table: LiveCrapsTable, services: Services, result: RoundResult, comeOutSum: number, label: string): void {
-  const winners: { userId: string; net: number }[] = [];
+  const results: BettorResult[] = [];
   for (const [userId, bets] of table.bets) {
     const staked = bets.reduce((s, b) => s + b.amount, 0);
     let returned = 0;
@@ -214,7 +206,7 @@ function settle(table: LiveCrapsTable, services: Services, result: RoundResult, 
       });
     }
     const net = returned - staked;
-    if (net > 0) winners.push({ userId, net });
+    results.push({ userId, net, balance: services.wallet.getBalance(table.guildId, userId) });
     services.rounds.record({
       game: "craps",
       guildId: table.guildId,
@@ -228,8 +220,8 @@ function settle(table: LiveCrapsTable, services: Services, result: RoundResult, 
   }
   services.wallet.closeGame(table.roundId);
 
-  winners.sort((a, b) => b.net - a.net);
-  table.lastWinners = winners;
+  results.sort((a, b) => b.net - a.net);
+  table.lastResults = results;
   pushHistory(table, label);
 }
 
@@ -254,8 +246,8 @@ async function runRound(table: LiveCrapsTable, services: Services): Promise<void
     if (table.closed || table.phase !== "betting") return;
     if (table.bets.size === 0) {
       // Nobody bet — still roll a silent result for the Recent strip (like roulette's/crash's
-      // empty rounds), skipping the animation, then reopen betting. lastWinners is left intact
-      // so the panel keeps the last real round's winners through idle rounds.
+      // empty rounds), skipping the animation, then reopen betting. lastResults is left intact
+      // so the panel keeps the last real round's results through idle rounds.
       pushHistory(table, silentRoundLabel());
       openNextRound(table, services);
       return;
