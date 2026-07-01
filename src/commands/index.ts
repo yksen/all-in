@@ -4,10 +4,8 @@ import { topWins, topLosses } from "./top.ts";
 import { recent } from "./recent.ts";
 import { stats, serverstats } from "./stats.ts";
 import { blackjackCommand } from "../games/blackjack.ts";
-import { adminRouletteCommand } from "../games/roulette.ts";
-import { adminCrashCommand } from "../games/crash.ts";
-import { adminCrapsCommand } from "../games/craps.ts";
 import { pokerCommand } from "../games/poker.ts";
+import { baccaratCommand } from "../games/baccarat.ts";
 import { coinflipCommand } from "../games/coinflip.ts";
 import { diceDuelCommand } from "../games/diceduel.ts";
 import { admin } from "./admin.ts";
@@ -24,10 +22,8 @@ export const commands: Command[] = [
   stats,
   serverstats,
   blackjackCommand,
-  adminRouletteCommand,
-  adminCrashCommand,
-  adminCrapsCommand,
   pokerCommand,
+  baccaratCommand,
   coinflipCommand,
   diceDuelCommand,
   admin,

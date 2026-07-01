@@ -4,8 +4,10 @@ import { rouletteComponent } from "../games/roulette.ts";
 import { crashComponent } from "../games/crash.ts";
 import { crapsComponent } from "../games/craps.ts";
 import { pokerComponent } from "../games/poker.ts";
+import { baccaratComponent } from "../games/baccarat.ts";
 import { coinflipComponent } from "../games/coinflip.ts";
 import { diceDuelComponent } from "../games/diceduel.ts";
+import { adminComponent } from "../commands/admin.ts";
 
 /**
  * Component handlers, keyed by the first segment of a button/select/modal customId.
@@ -17,6 +19,8 @@ export const componentHandlers: ComponentHandler[] = [
   crashComponent,
   crapsComponent,
   pokerComponent,
+  baccaratComponent,
   coinflipComponent,
   diceDuelComponent,
+  adminComponent,
 ];

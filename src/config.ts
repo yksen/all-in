@@ -144,6 +144,14 @@ export const config = {
       minAnte: 10,
       maxAnte: 5_000,
     },
+    baccarat: {
+      minBet: 10,
+      maxBet: 10_000,
+      /** Commission on a winning Banker bet (net 0.95:1 at 5%). */
+      bankerCommissionPct: 5,
+      /** Profit multiple on a winning Tie bet (8:1 → returns 9×). */
+      tiePayout: 8,
+    },
     coinflip: {
       minBet: 10,
       maxBet: 50_000,

@@ -10,12 +10,11 @@ import {
   MessageFlags,
   ModalBuilder,
   type ModalSubmitInteraction,
-  PermissionFlagsBits,
-  SlashCommandBuilder,
+  type StringSelectMenuInteraction,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import type { Command, ComponentHandler } from "../framework/types.ts";
+import type { ComponentHandler } from "../framework/types.ts";
 import type { Services } from "../services.ts";
 import { growthRate, multiplierAt, rollCrashPoint, timeToReach } from "./engine/crash.ts";
 import { renderCurve, renderExplosion } from "../ui/crash.ts";
@@ -400,11 +399,7 @@ export async function resumeCrashTables(services: Services, client: Client): Pro
 
 // --- commands ---------------------------------------------------------------
 
-function isAdmin(interaction: { memberPermissions: { has(p: bigint): boolean } | null }): boolean {
-  return interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
-}
-
-async function setupTable(interaction: ChatInputCommandInteraction<"cached">, services: Services): Promise<void> {
+export async function setupCrashTable(interaction: ChatInputCommandInteraction<"cached"> | StringSelectMenuInteraction<"cached">, services: Services): Promise<void> {
   const existing = tables.get(interaction.channelId);
   if (existing) {
     existing.closed = true;
@@ -433,7 +428,7 @@ async function setupTable(interaction: ChatInputCommandInteraction<"cached">, se
   scheduleNext(table, services, 0);
 }
 
-async function stopTable(interaction: ChatInputCommandInteraction<"cached">, services: Services): Promise<void> {
+export async function stopCrashTable(interaction: ChatInputCommandInteraction<"cached"> | StringSelectMenuInteraction<"cached">, services: Services): Promise<void> {
   const table = tables.get(interaction.channelId);
   if (!table) {
     await interaction.reply({ content: "There's no crash table on this channel.", flags: MessageFlags.Ephemeral });
@@ -455,26 +450,6 @@ async function stopTable(interaction: ChatInputCommandInteraction<"cached">, ser
   });
 }
 
-export const adminCrashCommand: Command = {
-  data: new SlashCommandBuilder()
-    .setName("admin-crash")
-    .setDescription("Manage the persistent crash table on this channel (admin)")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addSubcommand((s) => s.setName("setup").setDescription("Install or refresh the table on this channel"))
-    .addSubcommand((s) => s.setName("stop").setDescription("Stop and remove the table on this channel")),
-
-  async execute(interaction, services) {
-    if (!isAdmin(interaction)) {
-      await interaction.reply({ content: "Only server admins can manage the crash table.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    if (interaction.options.getSubcommand() === "stop") {
-      await stopTable(interaction, services);
-    } else {
-      await setupTable(interaction, services);
-    }
-  },
-};
 
 // --- placing bets / cashing out ---------------------------------------------
 
