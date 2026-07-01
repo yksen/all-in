@@ -11,13 +11,15 @@ import {
 } from "discord.js";
 import type { Command, ComponentHandler } from "../framework/types.ts";
 import type { Services } from "../services.ts";
-import { type Card, cardValue, Shoe } from "./engine/deck.ts";
+import { type Card, Shoe } from "./engine/deck.ts";
 import { handTotal, isBlackjack, isBust } from "./engine/handvalue.ts";
+import { canSplit, dealerShouldHit, firstUnfinished, type Hand, makeHand, OUTCOME_LABEL, settleHand } from "./engine/blackjack.ts";
 import { type SessionBase, SessionStore } from "../lib/sessions.ts";
 import { cid, newId, parseCid } from "../lib/ids.ts";
 import { formatChips, formatSigned } from "../lib/money.ts";
 import { replayStakes } from "../lib/stakes.ts";
-import { type CardView, renderCards, renderHand } from "../ui/cards.ts";
+import { type CardView, renderCards } from "../ui/cards.ts";
+import { dealerField, handField } from "../ui/blackjack.ts";
 import { Colors } from "../ui/theme.ts";
 import { config } from "../config.ts";
 import { InsufficientFundsError } from "../economy/wallet.ts";
@@ -25,19 +27,7 @@ import { replyError } from "../lib/reply.ts";
 import { sleep } from "../lib/sleep.ts";
 
 const PREFIX = "bj";
-const MAX_TOTAL_HANDS = 4;
 const BJ = config.games.blackjack;
-
-type Outcome = "win" | "loss" | "push" | "blackjack" | "surrender";
-
-interface Hand {
-  cards: Card[];
-  bet: number;
-  done: boolean;
-  doubled: boolean;
-  surrendered: boolean;
-  fromSplit: boolean;
-}
 
 interface BlackjackSession extends SessionBase {
   guildId: string;
@@ -68,20 +58,6 @@ function getStore(services: Services): SessionStore<BlackjackSession> {
 
 // --- pure-ish helpers -------------------------------------------------------
 
-function makeHand(bet: number, cards: Card[], fromSplit = false): Hand {
-  return { cards, bet, done: false, doubled: false, surrendered: false, fromSplit };
-}
-
-function firstUnfinished(session: BlackjackSession): number {
-  return session.hands.findIndex((h) => !h.done);
-}
-
-function dealerShouldHit(cards: Card[]): boolean {
-  const { total, soft } = handTotal(cards);
-  if (total < 17) return true;
-  return total === 17 && soft && BJ.dealerHitsSoft17;
-}
-
 /** Play out the dealer's hand, returning a snapshot after each card (for the reveal
  *  animation). The first snapshot is the 2-card hole-card flip. */
 function playDealerSteps(session: BlackjackSession): Card[][] {
@@ -96,71 +72,17 @@ function playDealerSteps(session: BlackjackSession): Card[][] {
   return steps;
 }
 
-/** Chips returned to the player for one hand (stake + winnings), and the outcome. */
-function settleHand(hand: Hand, dealer: Card[]): { ret: number; outcome: Outcome } {
-  if (hand.surrendered) return { ret: Math.floor(hand.bet / 2), outcome: "surrender" };
-  if (isBust(hand.cards)) return { ret: 0, outcome: "loss" };
-
-  const dealerNatural = isBlackjack(dealer);
-  const playerNatural = isBlackjack(hand.cards) && !hand.fromSplit;
-
-  if (playerNatural) {
-    if (dealerNatural) return { ret: hand.bet, outcome: "push" };
-    const profit = Math.floor((hand.bet * BJ.blackjackPayoutNum) / BJ.blackjackPayoutDen);
-    return { ret: hand.bet + profit, outcome: "blackjack" };
-  }
-  if (dealerNatural) return { ret: 0, outcome: "loss" };
-
-  const dealerTotal = handTotal(dealer).total;
-  const playerTotal = handTotal(hand.cards).total;
-  if (dealerTotal > 21 || playerTotal > dealerTotal) return { ret: hand.bet * 2, outcome: "win" };
-  if (playerTotal === dealerTotal) return { ret: hand.bet, outcome: "push" };
-  return { ret: 0, outcome: "loss" };
-}
-
-const OUTCOME_LABEL: Record<Outcome, string> = {
-  win: "✅ Win",
-  loss: "❌ Loss",
-  push: "➖ Push",
-  blackjack: "🃏 Blackjack!",
-  surrender: "🏳️ Surrender",
-};
-
 // --- rendering --------------------------------------------------------------
 
-function totalString(cards: Card[]): string {
-  const { total, soft } = handTotal(cards);
-  return soft && total <= 21 ? `${total - 10}/${total}` : String(total);
-}
-
-function handField(hand: Hand, idx: number, active: boolean, reveal: boolean): { name: string; value: string } {
-  const tags: string[] = [];
-  if (hand.doubled) tags.push("doubled");
-  if (hand.fromSplit) tags.push("split");
-  const tagStr = tags.length ? ` (${tags.join(", ")})` : "";
-  const marker = active && !reveal ? "▶ " : "";
-  return {
-    name: `${marker}Hand ${idx + 1} — bet ${formatChips(hand.bet)}${tagStr}`,
-    value: `${renderHand(hand.cards)}\n**Total: ${totalString(hand.cards)}**`,
-  };
-}
-
 function render(session: BlackjackSession, opts: { reveal: boolean }): EmbedBuilder {
-  const dealerValue = opts.reveal
-    ? `**Total: ${handTotal(session.dealer).total}**`
-    : `**Showing: ${handTotal([session.dealer[0]!]).total}+**`;
-
   const embed = new EmbedBuilder()
     .setColor(opts.reveal ? Colors.table : Colors.brand)
     .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
     .setTitle("🃏 Blackjack")
-    .addFields({
-      name: "🤵 Dealer",
-      value: `${renderHand(session.dealer, { hideFrom: opts.reveal ? undefined : 1 })}\n${dealerValue}`,
-    });
+    .addFields(dealerField(session.dealer, opts.reveal));
 
   for (let i = 0; i < session.hands.length; i++) {
-    embed.addFields(handField(session.hands[i]!, i, i === session.active, opts.reveal));
+    embed.addFields(handField(session.hands[i]!, `Hand ${i + 1}`, i === session.active, opts.reveal));
   }
   return embed;
 }
@@ -171,11 +93,7 @@ function actionButtons(session: BlackjackSession, services: Services): ActionRow
   const balance = services.wallet.getBalance(session.guildId, session.userId);
   const twoCards = hand.cards.length === 2;
   const canDouble = twoCards && !hand.doubled && balance >= hand.bet;
-  const canSplit =
-    twoCards &&
-    cardValue(hand.cards[0]!) === cardValue(hand.cards[1]!) &&
-    session.hands.length < MAX_TOTAL_HANDS &&
-    balance >= hand.bet;
+  const canSplitHand = canSplit(hand, session.hands.length) && balance >= hand.bet;
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(cid(PREFIX, "hit", session.id)).setLabel("Hit").setStyle(ButtonStyle.Primary),
@@ -189,7 +107,7 @@ function actionButtons(session: BlackjackSession, services: Services): ActionRow
       .setCustomId(cid(PREFIX, "split", session.id))
       .setLabel("Split")
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!canSplit),
+      .setDisabled(!canSplitHand),
   );
   if (BJ.allowSurrender) {
     row.addComponents(
@@ -274,8 +192,8 @@ function revealFrame(session: BlackjackSession, dealerCards: Card[]): EmbedBuild
     .setColor(Colors.table)
     .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
     .setTitle("🃏 Blackjack")
-    .addFields({ name: "🤵 Dealer", value: `${renderHand(dealerCards)}\n**Total: ${handTotal(dealerCards).total}**` });
-  for (let i = 0; i < session.hands.length; i++) embed.addFields(handField(session.hands[i]!, i, false, true));
+    .addFields(dealerField(dealerCards, true));
+  for (let i = 0; i < session.hands.length; i++) embed.addFields(handField(session.hands[i]!, `Hand ${i + 1}`, false, true));
   return embed;
 }
 
@@ -286,7 +204,7 @@ function holeFlipFrame(session: BlackjackSession, holeCards: Card[], holeView: C
     .setAuthor({ name: session.playerName, iconURL: session.playerIcon })
     .setTitle("🃏 Blackjack")
     .addFields({ name: "🤵 Dealer", value: renderCards(holeCards, ["face", holeView]) });
-  for (let i = 0; i < session.hands.length; i++) embed.addFields(handField(session.hands[i]!, i, false, true));
+  for (let i = 0; i < session.hands.length; i++) embed.addFields(handField(session.hands[i]!, `Hand ${i + 1}`, false, true));
   return embed;
 }
 
@@ -358,7 +276,7 @@ async function startBlackjack(
     };
 
     for (const hand of hands) if (isBlackjack(hand.cards)) hand.done = true;
-    session.active = firstUnfinished(session);
+    session.active = firstUnfinished(session.hands);
 
     if (isBlackjack(dealer) || session.active === -1) {
       const { embed } = resolve(session, services);
@@ -457,11 +375,7 @@ export const blackjackComponent: ComponentHandler = {
             break;
           }
           case "split": {
-            if (
-              hand.cards.length !== 2 ||
-              cardValue(hand.cards[0]!) !== cardValue(hand.cards[1]!) ||
-              session.hands.length >= MAX_TOTAL_HANDS
-            ) {
+            if (!canSplit(hand, session.hands.length)) {
               await interaction.reply({ content: "You can't split now.", flags: MessageFlags.Ephemeral });
               return;
             }
@@ -498,7 +412,7 @@ export const blackjackComponent: ComponentHandler = {
         throw err;
       }
 
-      const next = firstUnfinished(session);
+      const next = firstUnfinished(session.hands);
       if (next === -1) {
         const { embed, steps } = resolve(session, services);
         getStore(services).delete(session.id);

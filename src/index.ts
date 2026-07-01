@@ -10,6 +10,7 @@ import { VoiceTracker } from "./economy/voiceTracker.ts";
 import { resumeRouletteTables } from "./games/roulette.ts";
 import { resumeCrashTables } from "./games/crash.ts";
 import { resumeCrapsTables } from "./games/craps.ts";
+import { resumeBlackjackTables } from "./games/blackjackTable.ts";
 import { parseCid } from "./lib/ids.ts";
 import { replyError } from "./lib/reply.ts";
 import { runBackup, runRestore } from "./maintenance/backup.ts";
@@ -48,13 +49,15 @@ client.once(Events.ClientReady, async (c) => {
   await resumeRouletteTables(services, client);
   await resumeCrashTables(services, client);
   await resumeCrapsTables(services, client);
+  await resumeBlackjackTables(services, client);
 });
 
 /**
  * Any game still marked "open" in the DB was abandoned by a previous restart/crash
  * (in-memory sessions don't survive). Refund the escrowed chips and tell the players
- * by editing the original game message. Roulette-table rounds are refunded too, but
- * their message is left alone — the resumed table re-renders it itself.
+ * by editing the original game message. Persistent-table rounds (roulette/crash/craps/
+ * blackjack) are refunded too, but their message is left alone — the resumed table
+ * re-renders it itself.
  */
 async function recoverInterruptedGames(): Promise<void> {
   const { count, total, items } = services.wallet.refundOpenGames();
@@ -63,7 +66,7 @@ async function recoverInterruptedGames(): Promise<void> {
 
   const edited = new Set<string>();
   for (const item of items) {
-    if (item.game === "roulette" || item.game === "crash") continue; // the persistent table manages its own message
+    if (item.game === "roulette" || item.game === "crash" || item.game === "craps" || item.game === "blackjack_table") continue; // the persistent table manages its own message
     if (!item.channel_id || !item.message_id) continue;
     const key = `${item.channel_id}:${item.message_id}`;
     if (edited.has(key)) continue;

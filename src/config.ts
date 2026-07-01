@@ -121,6 +121,20 @@ export const config = {
       blackjackPayoutNum: 3,
       blackjackPayoutDen: 2,
       allowSurrender: false,
+      /** Seats at the persistent multiplayer table (an admin-installed channel table). */
+      tableSeats: 5,
+      /** Betting window after the first seat's bet, before the table deals. */
+      tableBettingSeconds: 20,
+      /** Per-turn timer; an idle seat is auto-stood when it expires. */
+      tableActionSeconds: 20,
+      /** Pause showing the result before the table resets for the next round. */
+      tableCooldownSeconds: 6,
+      /** Repost the table to the bottom of the channel this many seconds before the deal
+       *  (only if it's been buried by other chat) so latecomers can still see and join it. */
+      tableRepostLeadSeconds: 10,
+      /** While idle (waiting for the first bet), re-check this often and repost if a busy
+       *  channel has buried the table — otherwise it could sit lost for a long time. */
+      tableIdleRepostSeconds: 300,
     },
     /**
      * Roulette is a single, always-on European table that an admin installs on a

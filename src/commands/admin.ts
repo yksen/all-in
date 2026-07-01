@@ -18,6 +18,7 @@ import { config } from "../config.ts";
 import { setupRouletteTable, stopRouletteTable } from "../games/roulette.ts";
 import { setupCrashTable, stopCrashTable } from "../games/crash.ts";
 import { setupCrapsTable, stopCrapsTable } from "../games/craps.ts";
+import { setupBlackjackTable, stopBlackjackTable } from "../games/blackjackTable.ts";
 
 const PREFIX = "admin";
 
@@ -30,7 +31,9 @@ type AdminAction =
   | "crash-setup"
   | "crash-stop"
   | "craps-setup"
-  | "craps-stop";
+  | "craps-stop"
+  | "blackjack-setup"
+  | "blackjack-stop";
 
 const ACTIONS: { value: AdminAction; label: string; description: string }[] = [
   { value: "adjust", label: "💰 Adjust balance", description: "Add or remove chips from a player" },
@@ -42,6 +45,8 @@ const ACTIONS: { value: AdminAction; label: string; description: string }[] = [
   { value: "crash-stop", label: "🚀 Crash — stop table", description: "Stop and remove from this channel" },
   { value: "craps-setup", label: "🎲 Craps — setup table", description: "Install or refresh on this channel" },
   { value: "craps-stop", label: "🎲 Craps — stop table", description: "Stop and remove from this channel" },
+  { value: "blackjack-setup", label: "🃏 Blackjack — setup table", description: "Install or refresh on this channel" },
+  { value: "blackjack-stop", label: "🃏 Blackjack — stop table", description: "Stop and remove from this channel" },
 ];
 
 function textRow(id: string, label: string, required: boolean): ActionRowBuilder<TextInputBuilder> {
@@ -127,6 +132,10 @@ export const adminComponent: ComponentHandler = {
           return setupCrapsTable(interaction, services);
         case "craps-stop":
           return stopCrapsTable(interaction, services);
+        case "blackjack-setup":
+          return setupBlackjackTable(interaction, services);
+        case "blackjack-stop":
+          return stopBlackjackTable(interaction, services);
       }
       return;
     }

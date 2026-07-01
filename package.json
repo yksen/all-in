@@ -1,6 +1,6 @@
 {
   "name": "discord-all-in",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Discord casino & economy bot",
   "type": "module",
   "module": "src/index.ts",

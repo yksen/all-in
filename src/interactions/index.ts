@@ -3,6 +3,7 @@ import { blackjackComponent } from "../games/blackjack.ts";
 import { rouletteComponent } from "../games/roulette.ts";
 import { crashComponent } from "../games/crash.ts";
 import { crapsComponent } from "../games/craps.ts";
+import { blackjackTableComponent } from "../games/blackjackTable.ts";
 import { pokerComponent } from "../games/poker.ts";
 import { baccaratComponent } from "../games/baccarat.ts";
 import { coinflipComponent } from "../games/coinflip.ts";
@@ -18,6 +19,7 @@ export const componentHandlers: ComponentHandler[] = [
   rouletteComponent,
   crashComponent,
   crapsComponent,
+  blackjackTableComponent,
   pokerComponent,
   baccaratComponent,
   coinflipComponent,
